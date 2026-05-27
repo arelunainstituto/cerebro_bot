@@ -1,0 +1,25 @@
+# Não copiar para o contexto de build (acelera + evita leak de creds)
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets (NUNCA copiar para a imagem — usar env vars do EasyPanel)
+.env
+.env.*
+!.env.example
+core/google_creds.json
+google_creds.json
+
+# Git
+.git/
+.gitignore
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
