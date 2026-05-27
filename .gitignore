@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env
+
+# Local secrets (only .env.example is tracked)
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Secrets (Google Service Account)
+core/google_creds.json
+google_creds.json
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Logs
+*.log
