@@ -109,6 +109,15 @@ Regras finais:
 - `transfer=true` apenas se a conversa precisa MESMO de humano (caso fora do âmbito); senão `false`."""
 
 
+_SMS_MODE_BLOCK = """🟡 CANAL = SMS — REGRAS ADICIONAIS OBRIGATÓRIAS:
+- Máximo 160 caracteres por mensagem em `reply[]` (preferir 1 só item curto).
+- Texto plano: SEM emojis (inclui 😊😔), SEM markdown, SEM travessões (— ou –), SEM aspas curvas.
+- Saudação inicial igualmente curta: "Olá! Sou a Rosa do Instituto Areluna. Qual é o teu nome?" cabe em SMS.
+- PROIBIDO o passo prova_social com imagens — SMS não envia fotos. Salta de `pop_step=3` (paciente_check) directo para `pop_step=5` (validacao) com convite verbal: "Posso mostrar-te casos na videochamada com a Talita."
+- Quando propores agendamento, NÃO listes horários (cabe na chamada com Talita). Convida: "Posso pôr-te em contacto com a Talita para a videochamada?"
+- A frase de empatia continua a existir, mas sem emoji e curta."""
+
+
 def _build_user_prompt(state: BotState) -> str:
     qual = state.qualification_state.model_dump(exclude_none=True)
     mem_tail = state.short_memory[-8:] if state.short_memory else []
@@ -121,7 +130,10 @@ def _build_user_prompt(state: BotState) -> str:
         "",
         f"Já preenchidos: {qual or '(vazio — ainda nada extraído)'}",
         f"Passo POP actual: {state.pop_step}",
+        f"Canal: {state.channel}",
     ]
+    if state.channel == "sms":
+        parts.extend(["", _SMS_MODE_BLOCK])
     if mem_tail:
         hist = "\n".join(
             f"{'Lead' if t.role == 'user' else 'Rosa'}: {t.content}" for t in mem_tail

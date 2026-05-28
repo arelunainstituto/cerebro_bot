@@ -39,7 +39,7 @@ class BotState(BaseModel):
     # --- Input do turno ---
     phone_id: str
     contact_phone: str
-    channel: str = "whatsapp"
+    channel: str = "whatsapp"  # "whatsapp" | "sms" | ... (livre, propagado pelo gateway)
     incoming_message: str
     context_id: str | None = None
 
