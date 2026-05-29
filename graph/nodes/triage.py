@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
+from core.catalog import normalize_area
 from core.llm import invoke_structured
 from graph.state import BotState
 from schemas import TriageOutput
@@ -72,6 +74,17 @@ OBJECTIVO: qualificar (queixa, área, dados básicos) e conduzir até agendar um
    - "dentes tortos" / "alinhar" / "mordida" → "ortodontia"
    - "amarelos" / "manchas" / "sorriso mais branco" → "facetas"
    - "queda de cabelo" / "calva" → "transplante capilar"
+
+═══════════ CATÁLOGO AUTORIZADO ═══════════
+O Instituto Areluna SÓ trata:
+- Dentária: implantes, all-on, próteses, ortodontia (alinhadores, invisalign, aparelho), facetas/lentes de contacto, branqueamento, periodontia (gengivas), endodontia (canal), cirurgia oral (extracções, sisos).
+- Estética facial: botox, ácido hialurónico, harmonização facial.
+- Capilar: transplante FUE, alopecia.
+- Pacote: turismo dentário (pacientes do estrangeiro).
+
+🔴 FORA-DO-ÂMBITO — se o lead pedir QUALQUER outra coisa (urologia, cirurgia plástica corporal, podologia, oftalmologia, ortopedia, ginecologia, etc.), NÃO finjas que tratamos. Responde curto e cordial: "Isso não faz parte dos nossos tratamentos. Posso ajudar-te com algo de dentária, estética facial ou capilar?" + marca `pop_step=10` + devolve `qualification_state_patch` SEM `area_interesse`.
+
+🔴 NUNCA gravar `area_interesse` com texto livre estranho ("preenchimento peniano", "X qualquer"). Só áreas do catálogo acima.
 
 🔴 NÃO INSISTIR — se o lead disser "não tem necessidade", "estou satisfeit@", "tudo perfeito obrigad@", NÃO ofereças marcação outra vez. Devolve despedida cordial e marca `pop_step=10` (encerramento). NÃO uses 😊 fora deste caso.
 
@@ -143,18 +156,65 @@ def _build_user_prompt(state: BotState) -> str:
 
 
 def _merge_patch(state: BotState, patch: dict) -> None:
-    """Aplica patch ao qualification_state respeitando pivô-de-área e nomes."""
+    """Aplica patch ao qualification_state respeitando pivô-de-área e nomes.
+
+    Blindagem: `area_interesse` só é gravado se bater no catálogo central
+    (`core.catalog.normalize_area`). Texto livre estranho (ex.: "preenchimento
+    peniano") é descartado silenciosamente para não sujar bot_sessions.
+    """
     if not patch:
         return
+    # Blindar area_interesse contra valores fora-do-catálogo.
+    if "area_interesse" in patch:
+        canonical = normalize_area(patch.get("area_interesse"))
+        if canonical is None:
+            log.info(
+                "[triage] descartado area_interesse fora-do-catálogo: %r",
+                patch.get("area_interesse"),
+            )
+            patch = {k: v for k, v in patch.items() if k != "area_interesse"}
+        else:
+            patch = {**patch, "area_interesse": canonical}
     current = state.qualification_state.model_dump(exclude_none=True)
-    # Não sobrescrever area_interesse com valor diferente em queixa colateral
-    # (a regra do prompt já tenta evitar isto, mas defendemos aqui no código).
-    if "area_interesse" in patch and current.get("area_interesse"):
-        # Se o LLM sugere area diferente, aceitamos (assume que validou o pivô).
-        pass
     merged = {**current, **{k: v for k, v in patch.items() if v not in (None, "")}}
     # Re-validar via Pydantic mantém tipos consistentes; extras são allowed.
     state.qualification_state = state.qualification_state.__class__.model_validate(merged)
+
+
+_GREETING_OPENERS_RE = re.compile(
+    r"^\s*(ol[áa]!?,?\s+|ol[áa]\b|bom\s+dia\b|boa\s+tarde\b|boa\s+noite\b|sou\s+a?\s*rosa\b)",
+    re.IGNORECASE,
+)
+
+
+def _strip_double_greeting(state: BotState) -> None:
+    """Defesa contra a Rosa cumprimentar duas vezes na mesma conversa.
+
+    O system prompt já diz para não fazer, mas o LLM viola em conversas
+    longas. Se já existe histórico (não é a primeira mensagem) e o reply
+    começa com saudação, removemos.
+    """
+    if not state.short_memory:
+        return  # primeira mensagem — saudação é OK
+    cleaned = []
+    for r in state.reply:
+        if not r:
+            continue
+        m = _GREETING_OPENERS_RE.match(r)
+        if m:
+            tail = r[m.end():].lstrip(" ,.!-—").lstrip()
+            if tail:
+                log.info("[triage] guard: stripped greeting prefix de %r → %r", r, tail)
+                # Capitaliza a 1ª letra
+                cleaned.append(tail[0].upper() + tail[1:] if tail else tail)
+            else:
+                # Era apenas "Olá!" — substitui por reconhecimento neutro.
+                log.info("[triage] guard: dropped greeting-only reply %r", r)
+                cleaned.append("Continuando.")
+        else:
+            cleaned.append(r)
+    if cleaned:
+        state.reply = cleaned
 
 
 def _record_step_transition(state: BotState, new_step: int) -> None:
@@ -203,8 +263,11 @@ async def triage_node(state: BotState) -> BotState:
     reply_msgs = [s for s in (out.reply or []) if s and s.strip()]
     state.reply = reply_msgs or ["(sem resposta)"]
 
-    # Merge qualification
+    # Merge qualification (com blindagem de catálogo em area_interesse)
     _merge_patch(state, out.qualification_state_patch or {})
+
+    # Defesa contra cumprimentar duas vezes (LLM ignora a regra do prompt às vezes)
+    _strip_double_greeting(state)
 
     # POP step transition + history
     if out.pop_step is not None:

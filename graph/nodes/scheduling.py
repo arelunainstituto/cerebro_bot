@@ -116,6 +116,20 @@ def _format_slots_pt(slots: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_slots_pt_sms(slots: list[dict[str, Any]], max_items: int = 3) -> str:
+    """Variante curta para SMS — até 3 opções, sem ISO, sem hifens longos."""
+    if not slots:
+        return "(sem horários disponíveis nos próximos dias)"
+    lines = []
+    for i, s in enumerate(slots[:max_items], start=1):
+        iso = s["slot_start_iso"]
+        # Curto: sem dia da semana extenso. Ex.: "28 maio, 14:00"
+        local = s["slot_start_dt"].astimezone(_TZ)
+        short_when = f"{local.day} {_MONTHS_PT[local.month - 1]}, {local.strftime('%H:%M')}"
+        lines.append(f"{i}. {short_when} (ISO={iso})")
+    return "\n".join(lines)
+
+
 def _format_iso_pt(iso: str) -> str:
     """Fallback quando só temos o ISO (sem objecto datetime já parseado)."""
     try:
@@ -169,18 +183,35 @@ def _build_user_prompt(
     now_pt = datetime.now(_TZ).strftime("%A, %d de %B de %Y, %H:%M")
     qual = state.qualification_state.model_dump(exclude_none=True)
     mem_tail = state.short_memory[-4:] if state.short_memory else []
+    is_sms = state.channel == "sms"
+
+    slots_block = _format_slots_pt_sms(slots) if is_sms else _format_slots_pt(slots)
+    slots_header = (
+        f"HORÁRIOS DISPONÍVEIS (até 3, próximos {_FETCH_DAYS} dias):"
+        if is_sms
+        else f"HORÁRIOS DISPONÍVEIS (próximos {_FETCH_DAYS} dias):"
+    )
 
     parts = [
         f"AGORA (Europe/Lisbon): {now_pt}",
+        f"Canal: {state.channel}",
         f"Nome do lead: {qual.get('nome') or '(desconhecido)'}",
         f"Área de interesse: {qual.get('area_interesse') or '(não definida)'}",
         f"Pendente de confirmação: {pending or '(nenhum)'}",
         "",
-        f"HORÁRIOS DISPONÍVEIS (próximos {_FETCH_DAYS} dias):",
-        _format_slots_pt(slots),
+        slots_header,
+        slots_block,
         "",
         f'Mensagem do lead: "{state.incoming_message}"',
     ]
+    if is_sms:
+        parts.extend([
+            "",
+            "🟡 CANAL = SMS — REGRAS ADICIONAIS:",
+            "- Máximo 160 caracteres no reply.",
+            "- Sem emojis, sem markdown, sem travessões, sem listas numeradas longas.",
+            "- Propõe no máximo 2 horários em texto corrido. Ex.: 'Posso marcar 28 maio 14:00 ou 29 maio 10:30. Qual preferes?'",
+        ])
     if mem_tail:
         hist = "\n".join(
             f"{'Lead' if t.role == 'user' else 'Bot'}: {t.content}" for t in mem_tail
@@ -313,12 +344,13 @@ async def scheduling_node(state: BotState, config: RunnableConfig) -> BotState:
         return state
 
     # 5) Despachar acção
+    fmt_slots = _format_slots_pt_sms if state.channel == "sms" else _format_slots_pt
     if out.action == "propose":
         if not _valid_iso(out.slot_iso, slots):
             log.warning("[scheduling] LLM propôs slot inválido: %r — fallback re-propor", out.slot_iso)
             state.reply = [
                 "Olha, estes são os horários que tenho disponíveis. Diz-me qual te dá jeito:",
-                _format_slots_pt(slots),
+                fmt_slots(slots),
             ]
             return state
         ok = await hold_slot(pool, out.slot_iso, state.phone_id, ttl_minutes=_HOLD_TTL_MIN)
@@ -327,7 +359,7 @@ async def scheduling_node(state: BotState, config: RunnableConfig) -> BotState:
             fresh = await fetch_available_slots(pool, days=_FETCH_DAYS, limit=_FETCH_LIMIT)
             state.reply = [
                 "Esse horário acabou de ser apanhado por outra pessoa. Estes ficaram disponíveis:",
-                _format_slots_pt(fresh),
+                fmt_slots(fresh),
             ]
             return state
         state.state_extras["_pending_confirm"] = out.slot_iso

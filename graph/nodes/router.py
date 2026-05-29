@@ -57,6 +57,9 @@ REGRA DE DEFAULT:
 - Primeira mensagem sem histórico → "triage".
 - Qualquer outra coisa (saudação, pergunta genérica, queixa, partilha de informação) → "triage".
 
+REGRA DE FORA-DO-ÂMBITO:
+- Se a `area_interesse` confirmada NÃO está no catálogo do Instituto Areluna (só fazemos dentária, estética facial, transplante capilar e turismo dentário) → "triage" para encerramento educado. NUNCA enviar para specialist (não há RAG para áreas que não tratamos) nem para scheduling.
+
 PIVÔ DE ÁREA:
 - A `area_interesse` actual (do histórico ou do template de origem) é um sinal forte.
 - Menção colateral a outra área ("ah, também tenho aparelho") NÃO chega para mudar agente nem área. Continua na área principal.
@@ -71,6 +74,14 @@ OUTPUT (JSON estrito):
 
 
 async def router_node(state: BotState) -> BotState:
+    # Fast-path: respond marcou no turno anterior que tentaram propor hora fora
+    # do scheduling — neste turno vamos direto a scheduling (slots reais do DB).
+    if state.state_extras.get("_force_scheduling"):
+        state.next_agent = "scheduling"
+        state.state_extras.pop("_force_scheduling", None)
+        log.info("[router] fast-path _force_scheduling=True → scheduling")
+        return state
+
     qual = state.qualification_state.model_dump(exclude_none=True)
     mem_tail = state.short_memory[-4:] if state.short_memory else []
 

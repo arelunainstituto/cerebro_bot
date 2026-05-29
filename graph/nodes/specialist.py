@@ -139,10 +139,20 @@ async def specialist_node(state: BotState, config: RunnableConfig) -> BotState:
         docs = []
 
     # --- LLM blindado ---
-    user_prompt = (
-        f"Pergunta do lead:\n{question}\n\n"
-        f"Documentos de Referência ({namespace}):\n{_format_docs(docs)}"
-    )
+    user_prompt_parts = [
+        f"Pergunta do lead:\n{question}",
+        "",
+        f"Documentos de Referência ({namespace}):\n{_format_docs(docs)}",
+    ]
+    if state.channel == "sms":
+        user_prompt_parts.extend([
+            "",
+            "🟡 CANAL = SMS — REGRAS ADICIONAIS:",
+            "- Máximo 160 caracteres no reply.",
+            "- 1 parágrafo curto, sem listas, sem markdown, sem emojis.",
+            "- Sintetiza o essencial da KB; nada de citar fontes/documentos.",
+        ])
+    user_prompt = "\n".join(user_prompt_parts)
 
     try:
         out: SpecialistOutput = await invoke_structured(
